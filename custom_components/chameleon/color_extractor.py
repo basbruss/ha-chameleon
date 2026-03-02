@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from io import BytesIO
 from pathlib import Path
 
 from homeassistant.core import HomeAssistant
@@ -13,6 +14,9 @@ _LOGGER = logging.getLogger(__name__)
 
 # RGB color type
 type RGBColor = tuple[int, int, int]
+
+
+# --- File-based extraction (existing) ---
 
 
 def _sync_extract_dominant_color(image_path: str, quality: int) -> RGBColor | None:
@@ -92,6 +96,91 @@ async def extract_color_palette(
     except Exception as e:
         _LOGGER.error("Failed to extract color palette from %s: %s", image_path, e)
         return []
+
+
+# --- Bytes-based extraction (for media player album art) ---
+
+
+def _sync_extract_dominant_color_from_bytes(image_bytes: bytes, quality: int) -> RGBColor | None:
+    """Synchronous color extraction from bytes - runs in executor."""
+    from colorthief import ColorThief
+
+    color_thief = ColorThief(BytesIO(image_bytes))
+    return color_thief.get_color(quality=quality)
+
+
+def _sync_extract_palette_from_bytes(image_bytes: bytes, color_count: int, quality: int) -> list[RGBColor]:
+    """Synchronous palette extraction from bytes - runs in executor."""
+    from colorthief import ColorThief
+
+    color_thief = ColorThief(BytesIO(image_bytes))
+    return color_thief.get_palette(color_count=color_count, quality=quality)
+
+
+async def extract_dominant_color_from_bytes(
+    hass: HomeAssistant,
+    image_bytes: bytes,
+    quality: int = DEFAULT_QUALITY,
+) -> RGBColor | None:
+    """
+    Extract the single dominant color from image bytes.
+
+    Args:
+        hass: Home Assistant instance (needed for executor)
+        image_bytes: Raw image data (e.g. from media player album art)
+        quality: Color extraction quality (1=highest, 10=fastest)
+
+    Returns:
+        RGB tuple (r, g, b) or None if extraction fails
+    """
+    try:
+        _LOGGER.debug("Extracting dominant color from %d bytes of image data", len(image_bytes))
+        color = await hass.async_add_executor_job(
+            _sync_extract_dominant_color_from_bytes,
+            image_bytes,
+            quality,
+        )
+        _LOGGER.debug("Extracted dominant color from bytes: %s", color)
+        return color
+    except Exception as e:
+        _LOGGER.error("Failed to extract dominant color from image bytes: %s", e)
+        return None
+
+
+async def extract_color_palette_from_bytes(
+    hass: HomeAssistant,
+    image_bytes: bytes,
+    color_count: int = DEFAULT_COLOR_COUNT,
+    quality: int = DEFAULT_QUALITY,
+) -> list[RGBColor]:
+    """
+    Extract a palette of colors from image bytes.
+
+    Args:
+        hass: Home Assistant instance (needed for executor)
+        image_bytes: Raw image data (e.g. from media player album art)
+        color_count: Number of colors to extract
+        quality: Color extraction quality (1=highest, 10=fastest)
+
+    Returns:
+        List of RGB tuples, or empty list if extraction fails
+    """
+    try:
+        _LOGGER.debug("Extracting %d colors from %d bytes of image data", color_count, len(image_bytes))
+        colors = await hass.async_add_executor_job(
+            _sync_extract_palette_from_bytes,
+            image_bytes,
+            color_count,
+            quality,
+        )
+        _LOGGER.debug("Extracted %d colors from bytes: %s", len(colors), colors)
+        return colors
+    except Exception as e:
+        _LOGGER.error("Failed to extract color palette from image bytes: %s", e)
+        return []
+
+
+# --- Shared utilities ---
 
 
 def generate_gradient_path(

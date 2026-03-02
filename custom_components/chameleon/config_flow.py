@@ -19,6 +19,7 @@ from .const import (
     CONF_ANIMATION_ENABLED,
     CONF_ANIMATION_SPEED,
     CONF_LIGHT_ENTITIES,
+    CONF_MEDIA_PLAYER,
     DEFAULT_ANIMATION_ENABLED,
     DEFAULT_ANIMATION_SPEED,
     DOMAIN,
@@ -31,7 +32,7 @@ from .helpers import get_entry_title
 class ChameleonConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Chameleon."""
 
-    VERSION = 2  # Bumped for multi-light support
+    VERSION = 3  # Bumped for media player support
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle the initial step."""
@@ -59,6 +60,12 @@ class ChameleonConfigFlow(ConfigFlow, domain=DOMAIN):
                     EntitySelectorConfig(
                         domain="light",
                         multiple=True,
+                    )
+                ),
+                vol.Optional(CONF_MEDIA_PLAYER): EntitySelector(
+                    EntitySelectorConfig(
+                        domain="media_player",
+                        multiple=False,
                     )
                 ),
                 vol.Required(CONF_ANIMATION_ENABLED, default=DEFAULT_ANIMATION_ENABLED): BooleanSelector(),
