@@ -464,7 +464,7 @@ class ChameleonSceneSelect(SelectEntity):
             )
             return None
 
-        entity_picture = state.attributes.get("entity_picture")
+        entity_picture = state.attributes.get("entity_picture_local")
         if not entity_picture:
             _LOGGER.debug(
                 "Media player %s has no entity_picture attribute",
@@ -561,8 +561,8 @@ class ChameleonSceneSelect(SelectEntity):
 
         old_state = event.data.get("old_state")
 
-        new_picture = new_state.attributes.get("entity_picture")
-        old_picture = old_state.attributes.get("entity_picture") if old_state else None
+        new_picture = new_state.attributes.get("entity_picture_local")
+        old_picture = old_state.attributes.get("entity_picture_local") if old_state else None
 
         # Only react if entity_picture changed (= new track / new album art)
         if new_picture and new_picture != old_picture:
