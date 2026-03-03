@@ -22,6 +22,7 @@ CONF_LIGHT_ENTITY: Final = "light_entity"  # Deprecated, kept for migration
 CONF_LIGHT_ENTITIES: Final = "light_entities"  # New: list of light entities
 CONF_ANIMATION_ENABLED: Final = "animation_enabled"
 CONF_ANIMATION_SPEED: Final = "animation_speed"
+CONF_MEDIA_PLAYER: Final = "media_player_entity"  # Optional media player for album art
 
 # Platforms
 PLATFORMS: Final = ["select", "number", "switch", "button"]
@@ -42,6 +43,7 @@ MODE_ANIMATED: Final = "animated"
 # Special scene options
 SCENE_OFF: Final = "Off"  # Turn off all lights
 SCENE_RANDOM: Final = "Random"  # Pick a random scene
+SCENE_MEDIA_PLAYER: Final = "Media Player"  # Use album art from media player
 
 # Color extraction
 DEFAULT_COLOR_COUNT: Final = 8  # Number of colors to extract for palette

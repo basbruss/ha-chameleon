@@ -11,14 +11,18 @@ from typing import TYPE_CHECKING
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from homeassistant.helpers.network import get_url
 
 from .color_extractor import (
     RGBColor,
     extract_color_palette,
+    extract_color_palette_from_bytes,
     extract_dominant_color,
+    extract_dominant_color_from_bytes,
     generate_gradient_path,
 )
 from .const import (
@@ -26,12 +30,14 @@ from .const import (
     CONF_ANIMATION_SPEED,
     CONF_LIGHT_ENTITIES,
     CONF_LIGHT_ENTITY,
+    CONF_MEDIA_PLAYER,
     DEFAULT_BRIGHTNESS,
     DEFAULT_COLOR_COUNT,
     DEFAULT_SYNC_ANIMATION,
     DOMAIN,
     IMAGE_DIRECTORY,
     OPTIONS_CACHE_INTERVAL,
+    SCENE_MEDIA_PLAYER,
     SCENE_OFF,
     SCENE_RANDOM,
     SUPPORTED_EXTENSIONS,
@@ -128,6 +134,10 @@ class ChameleonSceneSelect(SelectEntity):
         self._scene_to_path: dict[str, Path] = {}  # Maps scene names to actual file paths
         self._options_cache_unsub: asyncio.TimerHandle | None = None
 
+        # Media player tracking
+        self._media_player_entity: str | None = entry.data.get(CONF_MEDIA_PLAYER)
+        self._last_media_picture: str | None = None  # Track entity_picture to detect changes
+
         # Light controller for shared logic
         self._light_controller = LightController(hass)
 
@@ -137,9 +147,10 @@ class ChameleonSceneSelect(SelectEntity):
         self.entity_id = f"select.chameleon_{base_name}_scene"
 
         _LOGGER.debug(
-            "ChameleonSceneSelect initialized: entity_id=%s, unique_id=%s",
+            "ChameleonSceneSelect initialized: entity_id=%s, unique_id=%s, media_player=%s",
             self.entity_id,
             self._attr_unique_id,
+            self._media_player_entity,
         )
 
     def _get_animation_manager(self) -> AnimationManager | None:
@@ -184,6 +195,20 @@ class ChameleonSceneSelect(SelectEntity):
             "Options cache refresh scheduled every %s seconds",
             OPTIONS_CACHE_INTERVAL.total_seconds(),
         )
+
+        # Set up media player state listener if configured
+        if self._media_player_entity:
+            self.async_on_remove(
+                async_track_state_change_event(
+                    self.hass,
+                    self._media_player_entity,
+                    self._handle_media_player_change,
+                )
+            )
+            _LOGGER.info(
+                "Media player listener registered for %s",
+                self._media_player_entity,
+            )
 
     async def async_will_remove_from_hass(self) -> None:
         """Run when entity is being removed."""
@@ -275,6 +300,10 @@ class ChameleonSceneSelect(SelectEntity):
             "is_animating": self._is_animating,
         }
 
+        # Media player info
+        if self._media_player_entity:
+            attrs["media_player_entity"] = self._media_player_entity
+
         # Palette and diagnostics - useful for custom cards and automations
         if self._extracted_palette:
             # Convert tuples to lists for JSON serialization
@@ -299,8 +328,12 @@ class ChameleonSceneSelect(SelectEntity):
         Includes special options at the beginning:
         - 'Off': Turn off all lights
         - 'Random': Pick a random scene from available images
+        - 'Media Player': Use album art from configured media player (if configured)
         """
-        return [SCENE_OFF, SCENE_RANDOM, *self._cached_options]
+        special_options = [SCENE_OFF, SCENE_RANDOM]
+        if self._media_player_entity:
+            special_options.append(SCENE_MEDIA_PLAYER)
+        return [*special_options, *self._cached_options]
 
     @property
     def current_option(self) -> str | None:
@@ -339,6 +372,11 @@ class ChameleonSceneSelect(SelectEntity):
             option = random.choice(self._cached_options)
             _LOGGER.info("Random scene selected: '%s'", option)
 
+        # Handle "Media Player" option - use album art
+        if option == SCENE_MEDIA_PLAYER:
+            await self._apply_media_player_colors()
+            return
+
         # Get runtime values from switch/number entities (or fall back to config)
         animation_enabled = self._get_runtime_animation_enabled()
         brightness = self._get_runtime_brightness()
@@ -373,7 +411,11 @@ class ChameleonSceneSelect(SelectEntity):
             self._applied_colors = result.applied_colors
             self._last_scene_change = datetime.now()
             mode = "animation started" if animation_enabled else "applied"
-            _LOGGER.info("Scene '%s' %s successfully to all lights", option, mode)
+            _LOGGER.info(
+                "Scene '%s' %s successfully to all lights",
+                option,
+                mode,
+            )
         elif result.all_failed:
             # All lights failed - don't update current_option
             self._last_error = "Failed to apply colors to any lights"
@@ -398,6 +440,281 @@ class ChameleonSceneSelect(SelectEntity):
             )
 
         self.async_write_ha_state()
+
+    # --- Media player methods ---
+
+    async def _fetch_media_player_image(self) -> bytes | None:
+        """Fetch album art image bytes from the configured media player.
+
+        Uses the entity_picture attribute which provides a proxy URL to the
+        currently playing media's artwork.
+
+        Returns:
+            Raw image bytes, or None if unavailable.
+        """
+        if not self._media_player_entity:
+            return None
+
+        state = self.hass.states.get(self._media_player_entity)
+        if not state or state.state not in ("playing", "paused"):
+            _LOGGER.debug(
+                "Media player %s is not playing (state=%s)",
+                self._media_player_entity,
+                state.state if state else "unknown",
+            )
+            return None
+
+        entity_picture = state.attributes.get("entity_picture_local")
+        if not entity_picture:
+            _LOGGER.debug(
+                "Media player %s has no entity_picture attribute",
+                self._media_player_entity,
+            )
+            return None
+
+        try:
+            # Build internal URL to fetch the image through HA's proxy
+            session = async_get_clientsession(self.hass)
+            base_url = get_url(self.hass)
+            url = f"{base_url}{entity_picture}"
+
+            _LOGGER.debug("Fetching album art from %s", url)
+
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    image_bytes = await resp.read()
+                    _LOGGER.debug(
+                        "Fetched %d bytes of album art from %s",
+                        len(image_bytes),
+                        self._media_player_entity,
+                    )
+                    return image_bytes
+                else:
+                    _LOGGER.warning(
+                        "Failed to fetch album art: HTTP %d from %s",
+                        resp.status,
+                        url,
+                    )
+                    return None
+        except Exception as e:
+            _LOGGER.error(
+                "Error fetching album art from %s: %s",
+                self._media_player_entity,
+                e,
+            )
+            return None
+
+    async def _apply_media_player_colors(self) -> None:
+        """Fetch album art and apply extracted colors to lights."""
+        image_bytes = await self._fetch_media_player_image()
+
+        if image_bytes is None:
+            self._last_error = "No album art available from media player"
+            _LOGGER.warning(self._last_error)
+            self.async_write_ha_state()
+            return
+
+        animation_enabled = self._get_runtime_animation_enabled()
+        brightness = self._get_runtime_brightness()
+
+        if animation_enabled:
+            result = await self._apply_colors_from_bytes_animated(image_bytes, brightness)
+        else:
+            result = await self._apply_colors_from_bytes_static(image_bytes, brightness)
+
+        # Update state based on result
+        if result.all_succeeded:
+            self._current_option = SCENE_MEDIA_PLAYER
+            self._applied_colors = result.applied_colors
+            self._last_scene_change = datetime.now()
+            mode = "animation started" if animation_enabled else "applied"
+            _LOGGER.info("Media player colors %s successfully to all lights", mode)
+        elif result.all_failed:
+            self._last_error = "Failed to apply media player colors to any lights"
+            self._failed_lights = result.failed_lights
+            _LOGGER.error("Media player colors failed: all lights failed")
+        else:
+            self._current_option = SCENE_MEDIA_PLAYER
+            self._applied_colors = result.applied_colors
+            self._failed_lights = result.failed_lights
+            self._last_scene_change = datetime.now()
+            self._last_error = (
+                f"Partial failure: {result.failed_count}/{len(result.results)} lights failed"
+            )
+            _LOGGER.warning(
+                "Media player colors partially applied: %d/%d lights succeeded",
+                result.succeeded_count,
+                len(result.results),
+            )
+
+        self.async_write_ha_state()
+
+    async def _handle_media_player_change(self, event: Event) -> None:
+        """Handle media player state changes.
+
+        Auto-updates lights when the track changes (entity_picture changes)
+        but only if the current scene is 'Media Player'.
+        """
+        new_state = event.data.get("new_state")
+        if not new_state:
+            return
+
+        old_state = event.data.get("old_state")
+
+        new_picture = new_state.attributes.get("entity_picture_local")
+        old_picture = old_state.attributes.get("entity_picture_local") if old_state else None
+
+        # Only react if entity_picture changed (= new track / new album art)
+        if new_picture and new_picture != old_picture:
+            self._last_media_picture = new_picture
+
+            # Auto-apply only if the current scene is "Media Player"
+            if self._current_option == SCENE_MEDIA_PLAYER:
+                _LOGGER.info(
+                    "Media player artwork changed, auto-updating lights"
+                )
+                await self._apply_media_player_colors()
+
+        elif new_state.state in ("idle", "off") and self._current_option == SCENE_MEDIA_PLAYER:
+            # Media player stopped - keep current colors (don't turn off)
+            _LOGGER.info(
+                "Media player stopped (state=%s), keeping current colors",
+                new_state.state,
+            )
+
+    # --- Bytes-based color application methods ---
+
+    async def _apply_colors_from_bytes_static(
+        self, image_bytes: bytes, brightness: int = 100
+    ) -> ApplyColorsResult:
+        """Extract colors from image bytes and apply statically to lights."""
+        num_lights = len(self._light_entities)
+
+        if num_lights == 1:
+            _LOGGER.debug("Extracting dominant color from bytes for single light")
+            color = await extract_dominant_color_from_bytes(self.hass, image_bytes)
+            if color:
+                self._extracted_palette = [color]
+                return await self._light_controller.apply_colors_to_lights(
+                    {self._light_entities[0]: color},
+                    brightness=brightness,
+                )
+            else:
+                _LOGGER.error("Failed to extract dominant color from image bytes")
+                return ApplyColorsResult()
+        else:
+            _LOGGER.debug("Extracting %d colors from bytes for %d lights", num_lights, num_lights)
+            colors = await extract_color_palette_from_bytes(
+                self.hass,
+                image_bytes,
+                color_count=max(num_lights, DEFAULT_COLOR_COUNT),
+            )
+
+            if not colors:
+                _LOGGER.error("Failed to extract color palette from image bytes")
+                return ApplyColorsResult()
+
+            _LOGGER.debug("Extracted %d colors from bytes: %s", len(colors), colors[:num_lights])
+
+            self._extracted_palette = colors
+
+            light_colors = {}
+            for i, light_entity in enumerate(self._light_entities):
+                color = colors[i % len(colors)]
+                light_colors[light_entity] = color
+
+            return await self._light_controller.apply_colors_to_lights(
+                light_colors,
+                brightness=brightness,
+            )
+
+    async def _apply_colors_from_bytes_animated(
+        self, image_bytes: bytes, brightness: int = 100
+    ) -> ApplyColorsResult:
+        """Extract colors from image bytes and start animation for lights."""
+        animation_manager = self._get_animation_manager()
+        if not animation_manager:
+            _LOGGER.error("AnimationManager not available")
+            return ApplyColorsResult()
+
+        animation_speed = self._get_runtime_animation_speed()
+        sync_animation = self._get_runtime_sync_animation()
+
+        colors = await extract_color_palette_from_bytes(
+            self.hass,
+            image_bytes,
+            color_count=DEFAULT_COLOR_COUNT,
+        )
+
+        if not colors:
+            _LOGGER.error("Failed to extract color palette from image bytes")
+            return ApplyColorsResult()
+
+        self._extracted_palette = colors
+
+        gradient = generate_gradient_path(colors, steps_between=10)
+        _LOGGER.debug(
+            "Generated gradient path with %d colors from %d palette colors (bytes source)",
+            len(gradient),
+            len(colors),
+        )
+
+        from .light_controller import LightResult
+
+        results = []
+        available_lights = []
+
+        for light_entity in self._light_entities:
+            is_available, error, error_msg = self._light_controller.check_light_availability(light_entity)
+            if is_available:
+                available_lights.append(light_entity)
+                results.append(
+                    LightResult(
+                        entity_id=light_entity,
+                        success=True,
+                        color=gradient[0] if gradient else None,
+                    )
+                )
+            else:
+                results.append(
+                    LightResult(
+                        entity_id=light_entity,
+                        success=False,
+                        error=error,
+                        error_message=error_msg,
+                    )
+                )
+
+        if available_lights:
+            if sync_animation:
+                await animation_manager.start_synchronized_animation(
+                    available_lights,
+                    gradient,
+                    speed=animation_speed,
+                    brightness=brightness,
+                )
+                _LOGGER.info(
+                    "Started synchronized animation for %d lights from bytes (speed=%.1fs)",
+                    len(available_lights),
+                    animation_speed,
+                )
+            else:
+                await animation_manager.start_staggered_animation(
+                    available_lights,
+                    gradient,
+                    speed=animation_speed,
+                    brightness=brightness,
+                )
+                _LOGGER.info(
+                    "Started staggered animation for %d lights from bytes (speed=%.1fs)",
+                    len(available_lights),
+                    animation_speed,
+                )
+
+        self._is_animating = True
+        return ApplyColorsResult(results=results)
+
+    # --- File-based color application methods (existing) ---
 
     async def _apply_colors_static(self, image_path: Path, brightness: int = 100) -> ApplyColorsResult:
         """Extract colors from image and apply statically to lights."""
@@ -542,6 +859,8 @@ class ChameleonSceneSelect(SelectEntity):
 
         self._is_animating = True
         return ApplyColorsResult(results=results)
+
+    # --- Scene lookup and light control ---
 
     async def _find_image_for_scene(self, scene_name: str) -> Path | None:
         """Find the image file path for a given scene name.
