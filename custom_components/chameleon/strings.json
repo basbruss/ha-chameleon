@@ -25,6 +25,25 @@
       "unknown": "Unexpected error occurred"
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Chameleon Options",
+        "description": "Modify the light entities and media player for this Chameleon instance. Changes will reload the integration.",
+        "data": {
+          "light_entities": "Light Entities",
+          "media_player_entity": "Media Player (optional)"
+        },
+        "data_description": {
+          "light_entities": "The RGB lights to control with scene colors.",
+          "media_player_entity": "Optional media player for album art color extraction. Clear to remove."
+        }
+      }
+    },
+    "error": {
+      "already_configured": "These lights are already configured in another Chameleon instance"
+    }
+  },
   "entity": {
     "select": {
       "scene": {
