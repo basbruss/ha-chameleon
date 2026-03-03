@@ -22,6 +22,7 @@ CONF_LIGHT_ENTITY: Final = "light_entity"  # Deprecated, kept for migration
 CONF_LIGHT_ENTITIES: Final = "light_entities"  # New: list of light entities
 CONF_ANIMATION_ENABLED: Final = "animation_enabled"
 CONF_ANIMATION_SPEED: Final = "animation_speed"
+CONF_MEDIA_PLAYER: Final = "media_player_entity"  # Optional media player for album art
 
 # Platforms
 PLATFORMS: Final = ["select", "number", "switch", "button"]
@@ -42,15 +43,21 @@ MODE_ANIMATED: Final = "animated"
 # Special scene options
 SCENE_OFF: Final = "Off"  # Turn off all lights
 SCENE_RANDOM: Final = "Random"  # Pick a random scene
+SCENE_MEDIA_PLAYER: Final = "Media Player"  # Use album art from media player
 
 # Color extraction
 DEFAULT_COLOR_COUNT: Final = 8  # Number of colors to extract for palette
 DEFAULT_QUALITY: Final = 10  # Color extraction quality (1 = highest, 10 = fastest)
 
+# Transitions
+# Static scenes: smooth fade when switching scenes (like Hue scene activation)
+DEFAULT_STATIC_TRANSITION_TIME: Final = 2.0  # seconds
+# Animation: kept for backward compat, but animation controllers use speed as transition
+DEFAULT_TRANSITION_TIME: Final = 0.1  # seconds (legacy, used as fallback only)
+
 # Animation
 MIN_ANIMATION_SPEED: Final = 0.1  # Minimum seconds per color change
 MAX_ANIMATION_SPEED: Final = 60  # Maximum seconds per color change
-DEFAULT_TRANSITION_TIME: Final = 0.1  # Instant snap transitions
 DEFAULT_SYNC_ANIMATION: Final = False  # Staggered animation by default (more natural)
 
 # Configuration keys for new entities

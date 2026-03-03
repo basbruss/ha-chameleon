@@ -1,4 +1,9 @@
-"""Animation loop and color cycling for Chameleon integration."""
+"""Animation loop and color cycling for Chameleon integration.
+
+Animation controllers use transition = speed to create smooth, continuous
+color fading similar to Philips Hue dynamic scenes. The light is always
+transitioning from one color to the next, with no static pause in between.
+"""
 
 from __future__ import annotations
 
@@ -21,7 +26,11 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class AnimationController:
-    """Controls color animation for a light entity."""
+    """Controls color animation for a light entity.
+
+    Uses transition = speed so the light continuously fades between colors
+    without any static pause, creating a smooth Hue-like dynamic effect.
+    """
 
     def __init__(
         self,
@@ -40,14 +49,15 @@ class AnimationController:
             light_entity: Entity ID of the light to animate
             colors: List of RGB colors to cycle through
             speed: Seconds between color changes
-            transition: Transition time for light changes
+            transition: Ignored - transition is set to speed for smooth fading
             brightness: Brightness percentage (1-100), converted to 0-255 for HA
         """
         self.hass = hass
         self.light_entity = light_entity
         self.colors = colors
         self.speed = speed
-        self.transition = transition
+        # Use speed as transition for continuous smooth fading (Hue-like behavior)
+        self.transition = speed
         self.brightness = brightness
 
         self._running = False
@@ -72,9 +82,11 @@ class AnimationController:
         self._running = True
         self._task = asyncio.create_task(self._animation_loop())
         _LOGGER.info(
-            "Started animation for %s with %d colors",
+            "Started animation for %s with %d colors (speed=%.1fs, transition=%.1fs)",
             self.light_entity,
             len(self.colors),
+            self.speed,
+            self.transition,
         )
 
     async def stop(self) -> None:
@@ -92,7 +104,7 @@ class AnimationController:
         _LOGGER.info("Stopped animation for %s", self.light_entity)
 
     async def _animation_loop(self) -> None:
-        """Main animation loop - cycles through colors."""
+        """Main animation loop - cycles through colors with smooth transitions."""
         while self._running:
             try:
                 color = self.colors[self._current_index]
@@ -119,7 +131,7 @@ class AnimationController:
                 # Move to next color
                 self._current_index = (self._current_index + 1) % len(self.colors)
 
-                # Wait before next color change
+                # Wait before next color change (matches transition time for seamless flow)
                 await asyncio.sleep(self.speed)
 
             except asyncio.CancelledError:
@@ -134,15 +146,17 @@ class AnimationController:
         self._current_index = 0
 
     def update_speed(self, speed: float) -> None:
-        """Update animation speed."""
+        """Update animation speed and transition to match."""
         self.speed = speed
+        self.transition = speed
 
 
 class SynchronizedAnimationController:
     """Controls synchronized color animation for multiple lights.
 
     Each light displays a different color from the gradient (distributed evenly),
-    and all lights cycle through colors together in sync.
+    and all lights cycle through colors together in sync. Uses transition = speed
+    for continuous smooth fading.
     """
 
     def __init__(
@@ -162,14 +176,15 @@ class SynchronizedAnimationController:
             light_entities: List of light entity IDs to animate together
             colors: List of RGB colors to cycle through
             speed: Seconds between color changes
-            transition: Transition time for light changes
+            transition: Ignored - transition is set to speed for smooth fading
             brightness: Brightness percentage (1-100), converted to 0-255 for HA
         """
         self.hass = hass
         self.light_entities = light_entities
         self.colors = colors
         self.speed = speed
-        self.transition = transition
+        # Use speed as transition for continuous smooth fading (Hue-like behavior)
+        self.transition = speed
         self.brightness = brightness
 
         self._running = False
@@ -200,9 +215,11 @@ class SynchronizedAnimationController:
         self._running = True
         self._task = asyncio.create_task(self._animation_loop())
         _LOGGER.info(
-            "Started synchronized animation for %d lights with %d colors",
+            "Started synchronized animation for %d lights with %d colors (speed=%.1fs, transition=%.1fs)",
             len(self.light_entities),
             len(self.colors),
+            self.speed,
+            self.transition,
         )
 
     async def stop(self) -> None:
@@ -253,7 +270,7 @@ class SynchronizedAnimationController:
                 # Move to next color (all lights advance together)
                 self._current_index = (self._current_index + 1) % num_colors
 
-                # Wait before next color change
+                # Wait before next color change (matches transition for seamless flow)
                 await asyncio.sleep(self.speed)
 
             except asyncio.CancelledError:
@@ -268,6 +285,7 @@ class StaggeredAnimationController:
 
     Each light changes color independently with random delays,
     creating an organic, non-synchronized breathing effect.
+    Uses transition = speed for continuous smooth fading.
     """
 
     def __init__(
@@ -286,14 +304,15 @@ class StaggeredAnimationController:
             light_entities: List of light entity IDs to animate
             colors: List of RGB colors to cycle through
             speed: Seconds between color changes (max delay for staggering)
-            transition: Transition time for light changes
+            transition: Ignored - transition is set to speed for smooth fading
             brightness: Brightness percentage (1-100), converted to 0-255 for HA
         """
         self.hass = hass
         self.light_entities = light_entities
         self.colors = colors
         self.speed = speed
-        self.transition = transition
+        # Use speed as transition for continuous smooth fading (Hue-like behavior)
+        self.transition = speed
         self.brightness = brightness
 
         self._running = False
@@ -328,9 +347,11 @@ class StaggeredAnimationController:
             self._tasks.append(task)
 
         _LOGGER.info(
-            "Started staggered animation for %d lights with %d colors",
+            "Started staggered animation for %d lights with %d colors (speed=%.1fs, transition=%.1fs)",
             len(self.light_entities),
             len(self.colors),
+            self.speed,
+            self.transition,
         )
 
     async def stop(self) -> None:
@@ -428,7 +449,7 @@ class AnimationManager:
         # Remove from sync if it was in sync mode
         self._sync_lights.discard(light_entity)
 
-        # Create new controller
+        # Create new controller (transition will be overridden to speed internally)
         controller = AnimationController(
             self.hass,
             light_entity,
@@ -451,6 +472,7 @@ class AnimationManager:
         """Start synchronized animation for multiple lights.
 
         All lights will change color at the same time, cycling through the gradient together.
+        Transition is automatically set to speed for smooth Hue-like fading.
         """
         # Stop any existing animations for these lights
         await self._stop_group_animations(light_entities)
@@ -484,6 +506,7 @@ class AnimationManager:
 
         Each light changes color independently with random delays,
         creating an organic, non-synchronized effect.
+        Transition is automatically set to speed for smooth Hue-like fading.
         """
         # Stop any existing animations for these lights
         await self._stop_group_animations(light_entities)
@@ -506,47 +529,49 @@ class AnimationManager:
         )
 
     async def _stop_group_animations(self, light_entities: list[str]) -> None:
-        """Stop any existing animations for the given lights."""
+        """Stop any animations for a group of lights."""
         # Stop individual controllers
         for light_entity in light_entities:
             if light_entity in self._controllers:
                 await self._controllers[light_entity].stop()
                 del self._controllers[light_entity]
 
-        # Stop existing sync controller if running
-        if self._sync_controller:
+        # Stop synchronized controller if any of these lights are in it
+        if self._sync_controller and self._sync_lights & set(light_entities):
             await self._sync_controller.stop()
             self._sync_controller = None
+            self._sync_lights.clear()
 
-        # Stop existing staggered controller if running
-        if self._staggered_controller:
+        # Stop staggered controller if any of these lights are in it
+        if self._staggered_controller and self._sync_lights & set(light_entities):
             await self._staggered_controller.stop()
             self._staggered_controller = None
 
-        self._sync_lights.clear()
-
     async def stop_animation(self, light_entity: str) -> None:
-        """Stop animation for a light entity."""
-        # Check if it's in sync/staggered mode
+        """Stop animation for a specific light entity."""
+        # Check individual controller
+        if light_entity in self._controllers:
+            await self._controllers[light_entity].stop()
+            del self._controllers[light_entity]
+
+        # Check if light is in a synchronized group
         if light_entity in self._sync_lights:
-            # Stop the entire group controller when any grouped light is stopped
             if self._sync_controller:
                 await self._sync_controller.stop()
                 self._sync_controller = None
             if self._staggered_controller:
                 await self._staggered_controller.stop()
                 self._staggered_controller = None
-            self._sync_lights.clear()
-            return
-
-        # Stop individual controller
-        if light_entity in self._controllers:
-            await self._controllers[light_entity].stop()
-            del self._controllers[light_entity]
+            self._sync_lights.discard(light_entity)
 
     async def stop_all(self) -> None:
-        """Stop all running animations."""
-        # Stop sync controller
+        """Stop all animations."""
+        # Stop individual controllers
+        for controller in self._controllers.values():
+            await controller.stop()
+        self._controllers.clear()
+
+        # Stop synchronized controller
         if self._sync_controller:
             await self._sync_controller.stop()
             self._sync_controller = None
@@ -557,20 +582,4 @@ class AnimationManager:
             self._staggered_controller = None
 
         self._sync_lights.clear()
-
-        # Stop individual controllers
-        for controller in list(self._controllers.values()):
-            await controller.stop()
-        self._controllers.clear()
-
-    def is_animating(self, light_entity: str) -> bool:
-        """Check if a light entity is currently animating."""
-        # Check sync/staggered mode first
-        if light_entity in self._sync_lights:
-            return (self._sync_controller is not None and self._sync_controller.is_running) or (
-                self._staggered_controller is not None and self._staggered_controller.is_running
-            )
-
-        # Check individual controller
-        controller = self._controllers.get(light_entity)
-        return controller.is_running if controller else False
+        _LOGGER.debug("Stopped all animations")
